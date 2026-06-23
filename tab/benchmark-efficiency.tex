@@ -1,0 +1,19 @@
+\begin{table}[H]
+\centering
+\caption{Model complexity and time complexity. $n =$ image size (pixels), $k =$ number of predicted instances.}
+\label{tab:benchmark-efficiency}
+\begin{tabular}{l r r l}
+\hline
+\textbf{Method} & \textbf{Params (M)} & \textbf{GFLOPs} & \textbf{Time Complexity} \\
+\hline
+StarDist~\cite{schmidt2018cell}    & 32.3  & 35   & $O(n + k^2)$ \\
+CPP-Net~\cite{chen2023cppnet}      & 34.7  & 30   & $O(n + k^2)$ \\
+HoVer-NeXt~\cite{baumann2024hovernext} & 36.1  & 24   & $O(n \log n + kn)$ \\
+LKCell~\cite{cui2024lkcell}        & 699.7 & 214  & $O(n \log n + kn)$ \\
+LSP-DETR~\cite{pekar2026lsp}       & 45.0  & 26   & $O(n)$ \\
+RayCastED-S & \textbf{0.81}  & \textbf{1.38}  & $O(n)$ \\
+RayCastED-B & 2.60   & 5.52  & $O(n)$ \\
+RayCastED-L & 9.44   & 12.42 & $O(n)$ \\
+\hline
+\end{tabular}
+\end{table}

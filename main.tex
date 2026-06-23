@@ -6,12 +6,19 @@
 \usepackage{algorithmic}
 \usepackage{graphicx}
 \usepackage{textcomp}
-\usepackage{xcolor}
+\usepackage[table]{xcolor}
+\usepackage{float}
+\usepackage{stfloats}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc}
+\usepackage{colortbl}
+\newcolumntype{M}{>{\columncolor{blue!8}}r}
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 \begin{document}
 
-\title{Paper Title}
+\title{RayCastED: Lightweight and Boundary-Aware Nuclei Detection Model for Histopathology Images%
+\thanks{Code: \texttt{https://github.com/DanishRitonga/RayCastED}}}
 
 \author{\IEEEauthorblockN{1\textsuperscript{st} Given Name Surname}
 \IEEEauthorblockA{\textit{Department of Electrical and} \\
@@ -35,238 +42,152 @@
 \maketitle
 
 \begin{abstract}
-This document is a model and instructions for \LaTeX.
-This and the IEEEtran.cls file define the components of your paper [title, text, heads, etc.]. *CRITICAL: Do Not Use Symbols, Special Characters, Footnotes, 
-or Math in Paper Title or Abstract.
+Nuclei instance segmentation in H\&E histopathology is critical for computational pathology tasks such as tumor-infiltrating lymphocyte scoring and cancer grading. However, densely overlapping nuclei and the reliance of existing contour-based and mask-based methods on handcrafted post-hoc processing (NMS, watershed) create geometric and computational overhead that precludes deployment on resource-constrained edge devices. This paper presents RayCastED, a lightweight, fully convolutional, end-to-end contour-based model that predicts star-convex polygons directly from an anchor grid in a single forward pass without any post-hoc processing. The architecture adopts a YOLO26-derived detection backbone with dual-label assignment for NMS-free inference, ResoConv blocks using the Haar discrete wavelet transform for boundary-preserving downsampling, and an analytical ray distance loss that recomputes ground-truth rays from the predicted centroid for scale-invariant gradients. Three variants (S: 0.81M, B: 2.6M, L: 9.44M parameters) share $O(n)$ linear complexity. On PanNuke 3-fold cross-validation, RayCastED-L attains 0.497 mean panoptic quality (4th overall) with the lowest per-tissue mPQ standard deviation, at 3--5$\times$ fewer parameters than comparable baselines and $\sim$75$\times$ fewer than LKCell. RayCastED-B achieves 29.2 ms/image on the Jetson Orin Nano, demonstrating viable real-time edge deployment for histopathology analysis.
 \end{abstract}
 
 \begin{IEEEkeywords}
-component, formatting, style, styling, insert
+Nuclei instance segmentation, histopathology, star-convex representation, edge deployment, panoptic quality.
 \end{IEEEkeywords}
 
+
 \section{Introduction}
-This document is a model and instructions for \LaTeX.
-Please observe the conference page limits. 
 
-\section{Ease of Use}
+Nuclei segmentation is a critical first step in histopathological image analysis, underpinning downstream tasks such as tumor grading, cellular composition analysis, and biomarker quantification~\cite{basu2023survey}. Deep learning has become the standard approach for this task~\cite{basu2023survey,deng2020deep}, yet clumped nuclei that produce overlapping and touching instances remain a persistent challenge.
 
-\subsection{Maintaining the Integrity of the Specifications}
+Instance segmentation has emerged as the dominant paradigm for separating individual nuclei~\cite{shephard2021simultaneous}. Within this paradigm, mask-based methods are the most prevalent in the literature~\cite{nunes2025survey}. However, mask-based instance segmentation carries two significant drawbacks. First, these methods are computationally heavy, typically employing two-stage architectures or elaborate post-processing pipelines~\cite{zhang2020mask}. Second, mask-based representations enforce pixel exclusivity---each pixel belongs to only one segment---which distorts morphology at contact boundaries where cells overlap~\cite{eppel2020computer}.
 
-The IEEEtran class file is used to format your paper and style the text. All margins, 
-column widths, line spaces, and text fonts are prescribed; please do not 
-alter them. You may note peculiarities. For example, the head margin
-measures proportionately more than is customary. This measurement 
-and others are deliberate, using specifications that anticipate your paper 
-as one part of the entire proceedings, and not as an independent document. 
-Please do not revise any of the current designations.
+Contour-based instance segmentation offers an attractive alternative by representing objects through their boundary geometry rather than dense pixel masks. These methods are inherently lighter, often using single-stage architectures~\cite{zhang2020mask}, and can incorporate geometric priors prior to training~\cite{xie2019polarmask}. StarDist~\cite{schmidt2018cell} exemplifies this approach by modeling cells as star-convex polygons, preserving boundary shape while maintaining per-cell separation. However, contour-based methods remain dependent on non-maximum suppression (NMS) as a post-processing step, which adds computational overhead and risks discarding valid predictions when instances lie in close proximity~\cite{schmidt2018cell}. Vision transformer (ViT) based approaches such as LSP-DETR~\cite{pekar2026lsp} can eliminate NMS through learned bipartite matching, but their transformer backbones introduce substantially higher computational cost that limits practicality for edge deployment.
 
-\section{Prepare Your Paper Before Styling}
-Before you begin to format your paper, first write and save the content as a 
-separate text file. Complete all content and organizational editing before 
-formatting. Please note sections \ref{AA}--\ref{SCM} below for more information on 
-proofreading, spelling and grammar.
+This paper proposes \textbf{RayCastED}, a model that bridges the gap between these paradigms by combining three desirable properties. \textit{Geometry-awareness:} the model employs ray-prediction based on star-convex polygons to capture true cellular boundaries, enabling precise area and morphological measurements without classifying every pixel. \textit{Lightweight architecture:} the fully convolutional backbone keeps computational overhead low, making the model suitable for edge deployment through TensorRT and ONNX Runtime. \textit{Truly end-to-end:} the architecture eliminates the need for NMS or other post-processing through dual-label assignment, allowing it to natively resolve dense, overlapping cellular scenarios while reducing inference overhead. Three model variants are introduced: RayCastED-S (0.81M parameters), RayCastED-B (2.6M), and RayCastED-L (9.44M), all sharing $O(n)$ linear complexity.
 
-Keep your text and graphic files separate until after the text has been 
-formatted and styled. Do not number text heads---{\LaTeX} will do that 
-for you.
+The contributions of this paper are: (1) the RayCastED architecture, a fully convolutional, post-hoc-processing-free contour-based detection model that integrates star-convex polygon prediction with dual-label assignment and ResoConv wavelet downsampling; (2) comprehensive benchmarking on PanNuke~\cite{gamper2020pannuke} against mask-based, contour-based, and transformer-based baselines; (3) edge deployment validation demonstrating viable real-time inference on the Jetson Orin Nano through TensorRT and ONNX Runtime; and (4) ablation studies identifying the Haar wavelet transform and ray density as key design factors.
 
-\subsection{Abbreviations and Acronyms}\label{AA}
-Define abbreviations and acronyms the first time they are used in the text, 
-even after they have been defined in the abstract. Abbreviations such as 
-IEEE, SI, MKS, CGS, ac, dc, and rms do not have to be defined. Do not use 
-abbreviations in the title or heads unless they are unavoidable.
+\section{Methodology}
 
-\subsection{Units}
-\begin{itemize}
-\item Use either SI (MKS) or CGS as primary units. (SI units are encouraged.) English units may be used as secondary units (in parentheses). An exception would be the use of English units as identifiers in trade, such as ``3.5-inch disk drive''.
-\item Avoid combining SI and CGS units, such as current in amperes and magnetic field in oersteds. This often leads to confusion because equations do not balance dimensionally. If you must use mixed units, clearly state the units for each quantity that you use in an equation.
-\item Do not mix complete spellings and abbreviations of units: ``Wb/m\textsuperscript{2}'' or ``webers per square meter'', not ``webers/m\textsuperscript{2}''. Spell out units when they appear in text: ``. . . a few henries'', not ``. . . a few H''.
-\item Use a zero before decimal points: ``0.25'', not ``.25''. Use ``cm\textsuperscript{3}'', not ``cc''.)
-\end{itemize}
+\subsection{Experimental Setup}
 
-\subsection{Equations}
-Number equations consecutively. To make your 
-equations more compact, you may use the solidus (~/~), the exp function, or 
-appropriate exponents. Italicize Roman symbols for quantities and variables, 
-but not Greek symbols. Use a long dash rather than a hyphen for a minus 
-sign. Punctuate equations with commas or periods when they are part of a 
-sentence, as in:
-\begin{equation}
-a+b=\gamma\label{eq}
-\end{equation}
+Training and evaluation were conducted on the PanNuke dataset~\cite{gamper2020pannuke}, which contains approximately 189,744 labeled nuclei across 19 tissue types with instance masks and five nuclear categories at approximately 0.25~MPP resolution. All training and benchmarking used an NVIDIA RTX 5070 Ti GPU. For edge deployment evaluation, the model was exported to ONNX (opset 17, graph simplified) and deployed on an NVIDIA Jetson Orin Nano across three configurations: ONNX Runtime, TensorRT FP32, and TensorRT FP16.
 
-Be sure that the 
-symbols in your equation have been defined before or immediately following 
-the equation. Use ``\eqref{eq}'', not ``Eq.~\eqref{eq}'' or ``equation \eqref{eq}'', except at 
-the beginning of a sentence: ``Equation \eqref{eq} is . . .''
+\subsection{Raycast Representation}
 
-\subsection{\LaTeX-Specific Advice}
-
-Please use ``soft'' (e.g., \verb|\eqref{Eq}|) cross references instead
-of ``hard'' references (e.g., \verb|(1)|). That will make it possible
-to combine sections, add equations, or change the order of figures or
-citations without having to go through the file line by line.
-
-Please don't use the \verb|{eqnarray}| equation environment. Use
-\verb|{align}| or \verb|{IEEEeqnarray}| instead. The \verb|{eqnarray}|
-environment leaves unsightly spaces around relation symbols.
-
-Please note that the \verb|{subequations}| environment in {\LaTeX}
-will increment the main equation counter even when there are no
-equation numbers displayed. If you forget that, you might write an
-article in which the equation numbers skip from (17) to (20), causing
-the copy editors to wonder if you've discovered a new method of
-counting.
-
-{\BibTeX} does not work by magic. It doesn't get the bibliographic
-data from thin air but from .bib files. If you use {\BibTeX} to produce a
-bibliography you must send the .bib files. 
-
-{\LaTeX} can't read your mind. If you assign the same label to a
-subsubsection and a table, you might find that Table I has been cross
-referenced as Table IV-B3. 
-
-{\LaTeX} does not have precognitive abilities. If you put a
-\verb|\label| command before the command that updates the counter it's
-supposed to be using, the label will pick up the last counter to be
-cross referenced instead. In particular, a \verb|\label| command
-should not go before the caption of a figure or a table.
-
-Do not use \verb|\nonumber| inside the \verb|{array}| environment. It
-will not stop equation numbers inside \verb|{array}| (there won't be
-any anyway) and it might stop a wanted equation number in the
-surrounding equation.
-
-\subsection{Some Common Mistakes}\label{SCM}
-\begin{itemize}
-\item The word ``data'' is plural, not singular.
-\item The subscript for the permeability of vacuum $\mu_{0}$, and other common scientific constants, is zero with subscript formatting, not a lowercase letter ``o''.
-\item In American English, commas, semicolons, periods, question and exclamation marks are located within quotation marks only when a complete thought or name is cited, such as a title or full quotation. When quotation marks are used, instead of a bold or italic typeface, to highlight a word or phrase, punctuation should appear outside of the quotation marks. A parenthetical phrase or statement at the end of a sentence is punctuated outside of the closing parenthesis (like this). (A parenthetical sentence is punctuated within the parentheses.)
-\item A graph within a graph is an ``inset'', not an ``insert''. The word alternatively is preferred to the word ``alternately'' (unless you really mean something that alternates).
-\item Do not use the word ``essentially'' to mean ``approximately'' or ``effectively''.
-\item In your paper title, if the words ``that uses'' can accurately replace the word ``using'', capitalize the ``u''; if not, keep using lower-cased.
-\item Be aware of the different meanings of the homophones ``affect'' and ``effect'', ``complement'' and ``compliment'', ``discreet'' and ``discrete'', ``principal'' and ``principle''.
-\item Do not confuse ``imply'' and ``infer''.
-\item The prefix ``non'' is not a word; it should be joined to the word it modifies, usually without a hyphen.
-\item There is no period after the ``et'' in the Latin abbreviation ``et al.''.
-\item The abbreviation ``i.e.'' means ``that is'', and the abbreviation ``e.g.'' means ``for example''.
-\end{itemize}
-An excellent style manual for science writers is \cite{b7}.
-
-\subsection{Authors and Affiliations}
-\textbf{The class file is designed for, but not limited to, six authors.} A 
-minimum of one author is required for all conference articles. Author names 
-should be listed starting from left to right and then moving down to the 
-next line. This is the author sequence that will be used in future citations 
-and by indexing services. Names should not be listed in columns nor group by 
-affiliation. Please keep your affiliations as succinct as possible (for 
-example, do not differentiate among departments of the same organization).
-
-\subsection{Identify the Headings}
-Headings, or heads, are organizational devices that guide the reader through 
-your paper. There are two types: component heads and text heads.
-
-Component heads identify the different components of your paper and are not 
-topically subordinate to each other. Examples include Acknowledgments and 
-References and, for these, the correct style to use is ``Heading 5''. Use 
-``figure caption'' for your Figure captions, and ``table head'' for your 
-table title. Run-in heads, such as ``Abstract'', will require you to apply a 
-style (in this case, italic) in addition to the style provided by the drop 
-down menu to differentiate the head from the text.
-
-Text heads organize the topics on a relational, hierarchical basis. For 
-example, the paper title is the primary text head because all subsequent 
-material relates and elaborates on this one topic. If there are two or more 
-sub-topics, the next level head (uppercase Roman numerals) should be used 
-and, conversely, if there are not at least two sub-topics, then no subheads 
-should be introduced.
-
-\subsection{Figures and Tables}
-\paragraph{Positioning Figures and Tables} Place figures and tables at the top and 
-bottom of columns. Avoid placing them in the middle of columns. Large 
-figures and tables may span across both columns. Figure captions should be 
-below the figures; table heads should appear above the tables. Insert 
-figures and tables after they are cited in the text. Use the abbreviation 
-``Fig.~\ref{fig}'', even at the beginning of a sentence.
-
-\begin{table}[htbp]
-\caption{Table Type Styles}
-\begin{center}
-\begin{tabular}{|c|c|c|c|}
-\hline
-\textbf{Table}&\multicolumn{3}{|c|}{\textbf{Table Column Head}} \\
-\cline{2-4} 
-\textbf{Head} & \textbf{\textit{Table column subhead}}& \textbf{\textit{Subhead}}& \textbf{\textit{Subhead}} \\
-\hline
-copy& More table copy$^{\mathrm{a}}$& &  \\
-\hline
-\multicolumn{4}{l}{$^{\mathrm{a}}$Sample of a Table footnote.}
-\end{tabular}
-\label{tab1}
-\end{center}
-\end{table}
-
-\begin{figure}[htbp]
-\centerline{\includegraphics{fig1.png}}
-\caption{Example of a figure caption.}
-\label{fig}
+\begin{figure}[H]
+\centering
+\input{fig/star-convex}
+\caption{Star-convex polygon defined by centroid $\mathbf{c}$ and radial ray distances $d_i$ at fixed angular intervals $\theta_i$, forming a dense boundary representation from polar coordinates.}
+\label{fig:raycast}
 \end{figure}
 
-Figure Labels: Use 8 point Times New Roman for Figure labels. Use words 
-rather than symbols or abbreviations when writing Figure axis labels to 
-avoid confusing the reader. As an example, write the quantity 
-``Magnetization'', or ``Magnetization, M'', not just ``M''. If including 
-units in the label, present them within parentheses. Do not label axes only 
-with units. In the example, write ``Magnetization (A/m)'' or ``Magnetization 
-\{A[m(1)]\}'', not just ``A/m''. Do not label axes with a ratio of 
-quantities and units. For example, write ``Temperature (K)'', not 
-``Temperature/K''.
+The model parameterized each nucleus as a star-convex polygon defined by a centroid $(x, y)$ and $N$ radial ray distances $\{d_1, d_2, \ldots, d_N\}$ emanating at fixed angular intervals. The angular convention used $\theta_1 = 0^{\circ}$ along the positive $x$-axis, increasing counter-clockwise with spacing $\Delta\theta = 360^{\circ} / N$. The PanNuke configuration set $N = 64$ rays. Compared with standard bounding-box output $(x, y, w, h)$, the raycast representation captured the actual cell boundary geometry with only modest additional parameters per detection.
+
+\subsection{Network Architecture}
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=0.6\textwidth]{fig/raycasted.pdf}
+\caption{RayCastED model architecture. The backbone uses ResoConv blocks with Haar discrete wavelet transform for boundary-preserving downsampling, supporting a P2--P5 feature pyramid. The neck follows an FPN-PAN design with top-down upsampling and bottom-up aggregation. The head applies RayCastDetect with RayRefinement blocks for polygon regression at P3 (S), P4 (M), and P5 (L) scales.}
+\label{fig:raycasted}
+\end{figure*}
+
+The architecture followed a backbone-neck-head design built on a YOLO26-derived fully convolutional detection framework~\cite{sapkota2025yolo26}, with all bounding-box regression components replaced by polygon prediction. Three model variants were developed: RayCastED-S (0.81M parameters), RayCastED-B (2.6M), and RayCastED-L (9.44M), scaling backbone width and depth.
+
+\textbf{Backbone.} The backbone employed a P2-P3-P4 feature pyramid at strides 4, 8, and 16, rather than the conventional P3-P4-P5 (strides 8, 16, 32). Since histopathology tiles at $256 \times 256$ pixels typically contained $\sim$200 nuclei, the standard P3-P4-P5 pyramid provided only 1{,}344 anchors, causing multiple nuclei to collide on the same anchor. The P2-P3-P4 configuration yielded 5{,}376 anchors, reducing oversubscription from $3\times$ to $0.74\times$. Downsampling was performed by ResoConv blocks, which replaced strided convolutions with a Haar (db1) discrete wavelet transform: four subbands (LL, LH, HL, HH) were extracted via depthwise convolution with fixed Haar filters, concatenated, passed through Squeeze-and-Excitation, and projected through a $1 \times 1$ convolution. Feature extraction used C3k2 blocks, with spatial pyramid pooling (SPPF) and positional attention (C2PSA) at the deepest level.
+
+\textbf{Neck.} An FPN-PAN (Feature Pyramid Network with Path Aggregation) operated at the P2, P3, and P4 scales. The upsampling path aggregated deep features with shallow features via nearest-neighbor upsampling, concatenation, and C3k2 fusion. The PAN downsample path used ResoConv blocks to propagate high-resolution features downward.
+
+\textbf{Detection head.} Each scale received a dedicated polygon regression stack: two $3 \times 3$ convolutions, a RayRefinementBlock, and a $1 \times 1$ projection. The RayRefinementBlock applied $3 \times 3$ depthwise convolution with GroupNorm and SiLU activation in a residual configuration, blending spatially neighboring features before committing to ray predictions and reducing jagged boundary outputs. The head produced $2 + N$ outputs per anchor: a centroid offset $(x, y)$ decoded through sigmoid activation and $N$ ray distances decoded through softplus to enforce strict positivity. Distribution Focal Loss (DFL) regression was removed entirely, as it held no meaning for polar coordinate outputs. An auxiliary centroid head provided a lightweight $1 \times 1$ convolution bypass that delivered direct backbone-to-centroid gradients, combating attenuation through the deep head stack. The head was initialized with ray biases calibrated for approximately 15-pixel radius cells.
+
+\subsection{Loss Functions}
+
+The training objective combined five loss terms:
+\begin{equation}
+L = \lambda_{cls} L_{cls} + \lambda_{xy} L_{xy} + \lambda_{L1} L_{L1} + \lambda_{piou} L_{PIoU} + \lambda_{s} L_{smooth}
+\end{equation}
+with weights $\lambda_{cls} = 2.0$, $\lambda_{xy} = 500.0$, $\lambda_{L1} = 14.0$, and $\lambda_{piou} = 3.0$; $\lambda_{s}$ was annealed from 0 to 3.0 over the first 40\% of training. Each branch (O2M and O2O) computed this loss independently, combined via the O2M/O2O weight schedule.
+
+The classification loss differed between branches. The O2M head used focal loss ($\gamma = 2.0$, $\alpha = 0.75$) with background subsampling at a 3:1 ratio of background to foreground anchors, suppressing the dominant background gradient signal. The O2O head, employing the split classification design, applied focal loss on the binary foreground/background head across all anchors and binary cross-entropy on the multiclass head restricted to foreground anchors only; the one-to-one assignment already eliminated the foreground--background imbalance.
+
+The centroid loss $L_{xy}$ applied Huber loss ($\delta = 0.05$) on normalized grid-cell offsets. The high weight $\lambda_{xy} = 500$ compensated for gradient attenuation caused by the sigmoid activation, stride multiplication, and pixel-space normalization that the offsets undergo during decoding.
+
+The ray distance loss $L_{L1}$ was the most distinctive component. During inference, ground-truth ray distances were computed by casting rays from the annotation centroid to the polygon boundary. During training, this same raycasting operation was reformulated as a differentiable Cramer's rule solver that computed analytical ray distances from the \emph{predicted} centroid (with gradients detached) to the ground-truth polygon boundary. The loss was evaluated in log-space:
+\begin{equation}
+L_{L1} = \frac{1}{R} \sum_{i=1}^{R} |\log(\hat{d}_i + \varepsilon) - \log(d_i^{\text{analytical}} + \varepsilon)|
+\end{equation}
+This analytical recomputation coupled centroid accuracy with ray supervision: the ray head was judged against geometrically correct targets for the position where the model placed the centroid, rather than against static targets from the ground-truth centroid, preventing conflicting gradient signals. Log-space evaluation provided scale-invariant gradients across small and large nuclei.
+
+The PolarIoU loss provided shape-aware geometric supervision. Following PolarMask~\cite{xie2019polarmask}, each nucleus was decomposed into $R$ triangular sectors with area $S_i = \tfrac{1}{2} \sin(2\pi/R) \cdot d_i d_{i+1}$. The sector-area formulation coupled adjacent rays through the product $d_i d_{i+1}$, unlike the original per-ray PolarMask formulation that treated each distance independently. The PolarIoU was:
+\begin{equation}
+IoU_{polar} = \frac{\sum_{i=0}^{R-1} \min(d_i, \hat{d}_i) \cdot \min(d_{i+1}, \hat{d}_{i+1})}{\sum_{i=0}^{R-1} \max(d_i, \hat{d}_i) \cdot \max(d_{i+1}, \hat{d}_{i+1})}
+\end{equation}
+with $L_{PIoU} = -\log(IoU_{polar})$. The PolarIoU was computed using analytical ground-truth rays derived from the predicted centroid (consistent with $L_{L1}$), rather than static ground-truth rays as in PolarMask.
+
+The smoothness loss applied a 1D discrete Laplacian $[-1, 2, -1]$ on the circular sequence of ray distances with cyclic indexing:
+\begin{equation}
+L_{smooth} = \frac{1}{R} \sum_{i=0}^{R-1} |d_{i+1} - 2d_i + d_{i-1}|
+\end{equation}
+The L1 norm was chosen over L2 for sparsity: along sections where the boundary evolved linearly, the Laplacian vanished exactly, while sharp corners at specific orientations incurred a bounded penalty. This loss penalized zigzag artifacts without pushing predictions toward any particular shape. The weight $\lambda_{s}$ was annealed from 0 to 3.0 over the first 40\% of training, allowing the model to learn coarse shape before refining boundary regularity.
+
+\subsection{End-to-End Assignment}
+
+To eliminate NMS dependency, the model employed a dual-assignment training strategy with two parallel instances of RayCastAssigner, which extended task-aligned matching by replacing standard IoU with PolarIoU in the alignment metric. The one-to-many (O2M) branch used $\text{topk}=15$ and $\text{topk}_2=15$ for dense multi-anchor supervision, while the one-to-one (O2O) branch used $\text{topk}=7$ and $\text{topk}_2=3\rightarrow 1$ (annealed over training) to select the single best anchor per ground truth for NMS-free inference.
+
+Both branches shared the same alignment metric form:
+\begin{equation}
+t = s^{\alpha} \cdot \text{PolarIoU}^{\beta} \cdot \exp\!\left(\frac{-d^2}{2\sigma^2}\right)
+\end{equation}
+where $s$ denoted the classification score, $\alpha=0.5$, $d$ the centroid-to-anchor distance, and $\sigma$ the per-nucleus radius computed as the 75th-percentile non-zero ray distance. The O2M branch used $\beta=2.0$, rewarding well-shaped polygon predictions during early training. The O2O branch used $\beta=0$, reducing the metric to pure classification-only matching ($s^{\alpha} \cdot \exp(-d^2/2\sigma^2)$). This matched inference conditions, where no localization feedback is available to resolve assignment ambiguity, creating a self-reinforcing dynamic in which higher classification confidence yields better assignments and stronger classification gradients.
+
+Three annealing schedules progressively shifted the training objective toward the O2O-only inference regime. The O2M and O2O branch weights transitioned linearly from $(0.8, 0.2)$ to $(0.1, 0.9)$. The O2O $\text{topk}_2$ parameter annealed from 3 to 1, allowing multiple positive anchors per ground truth during early feature learning before converging to strict bipartite matching. The smoothness loss weight $\lambda_s$ ramped from 0 to 3 over the first 40\% of training. At inference, the O2M head was discarded via fusion, leaving only the O2O head for NMS-free prediction.
+
+\input{tab/per-tissue}
+
+\section{Results}
+
+This section presents experimental results on PanNuke 3-fold cross-validation~\cite{gamper2020pannuke}, edge deployment latency, and ablation studies. All tables in this section report the mean across folds.
+
+\subsection{Experimental Setup}
+
+Evaluation followed a 3-fold cross-validation protocol on PanNuke, with each fold serving as the test set in turn. Six baseline methods were compared: StarDist~\cite{schmidt2018cell}, CPP-Net (ResNet50)~\cite{chen2023cppnet}, CellViT-SAM-H~\cite{horst2023cellvit}, LKCell-L~\cite{cui2024lkcell}, HoVer-NeXt~\cite{baumann2024hovernext}, and LSP-DETR~\cite{pekar2026lsp}. RayCastED predictions used a confidence threshold of 0.20. All predictions were rasterized to binary masks, with the largest mask assigned to overlapping pixels.
+
+Panoptic quality metrics (bPQ, mPQ) employed Hungarian matching at $\text{IoU} \geq 0.5$. Detection metrics (F1, precision, recall) used centroid-based matching with a 12-pixel distance threshold. Model selection was governed by the fitness function $0.7 \cdot \text{bPQ} + 0.3 \cdot \text{mAP}_{50}$. All RayCastED variants shared $O(n)$ linear complexity, with inference determined solely by the fixed anchor grid at resolutions $64 \times 64$, $32 \times 32$, and $16 \times 16$.
+
+\subsection{Comparison with State-of-the-Art}
+
+\input{tab/benchmark-efficiency}
+
+Table~\ref{tab:benchmark-efficiency} summarizes parameter counts, GFLOPs, and asymptotic time complexity. RayCastED-S (0.81M parameters, 1.38 GFLOPs) was over 40$\times$ smaller than the next-lightest baseline (StarDist, 32.3M) and approximately 860$\times$ smaller than LKCell. RayCastED-L (9.44M) remained 3--5$\times$ lighter than the baseline cluster (32--45M). The entire RayCastED family shared $O(n)$ linear complexity with LSP-DETR, a consequence of the post-hoc-processing-free design. In contrast, StarDist and CPP-Net incurred $O(n + k^2)$ from per-instance NMS, while LKCell and HoVer-NeXt paid $O(n \log n + kn)$ for watershed post-processing.
+
+Table~\ref{tab:per-tissue} reports per-tissue bPQ and mPQ across all 19 PanNuke organ types. LKCell achieved the highest overall bPQ (0.684) and mPQ (0.504), benefiting from its 699.7M-parameter capacity. CellViT (0.679/0.498) and CPP-Net (0.680/0.485) followed closely. RayCastED-L ranked fourth on mPQ (0.497) while matching the lowest per-tissue mPQ standard deviation (0.048, tied with HoVer-NeXt at 0.040), indicating the most consistent panoptic quality across heterogeneous tissue types at its parameter tier. RayCastED-L attained the best mPQ on five organs where boundary fidelity proved decisive: Adrenal Gland (0.569), Bile Duct (0.506), Breast (0.529), Liver (0.545), and Thyroid (0.507).
+
+\subsection{Edge Deployment}
+
+\input{tab/edge}
+
+Table~\ref{tab:edge} presents RayCastED-B inference across six configurations. On the RTX 5070 Ti, PyTorch achieved near-exact predicted nuclei count (65{,}679 of 65{,}847) in 3.59 ms/image, while TensorRT reduced latency to 2.70 ms/image. On the Jetson Orin Nano, TensorRT FP16 reached 29.2 ms/image, providing viable real-time inference on an embedded platform.
+
+An unexpected result emerged: the Jetson Orin Nano with TensorRT (both TF32 and FP16) produced consistently higher bPQ and mPQ than the RTX 5070 Ti desktop. This phenomenon was not observed on the RTX 2080 Super (bPQ~=~0.5983, mPQ~=~0.4746, matching the desktop baseline). The parity between TF32 and FP16 rules out quantization as the cause. The most plausible explanation is an architecture-specific TensorRT graph restructure that rearranges the computational graph for the Orin's Ampere-derived cores, incidentally improving numerical fidelity---an artifact not reproducible on older GPU architectures.
+
+\subsection{Ablation Studies}
+
+\input{tab/ablation-rays}
+
+\input{tab/ablation-wavelet}
+
+Table~\ref{tab:ablation-rays} evaluates RayCastED-B with $R \in \{8, 16, 32, 64\}$ rays. The overall standard deviation across ray counts was small (bPQ STD~=~0.0063, F1 STD~=~0.0015), indicating modest influence on downstream metrics. Notably, mPQ was non-monotonic with respect to $R$, peaking at $R = 16$ (0.4606) rather than at $R = 64$. This pattern suggests that the small 2.6M-parameter backbone converges to an approximately elliptical prior regardless of ray density, consistent with the well-established observation that nuclear membranes are mechanically constrained to near-convex shapes by the nuclear lamina. The $R = 64$ default was retained to maximize boundary fidelity for future larger backbones.
+
+Table~\ref{tab:ablation-wavelet} compares three wavelet transforms within ResoConv blocks. The Haar wavelet (db1) swept all five metrics (bPQ~=~0.6024, mPQ~=~0.4526, F1~=~0.7409, P~=~0.7419, R~=~0.7400), outperforming Daubechies-2 (db2) and Daubechies-4 (db4) by increasing margins. The degradation from db1 to db4 (bPQ drop of 0.0119, F1 drop of 0.0261) confirms that longer wavelet filter taps introduce excessive smoothing that attenuates fine-grained edge transitions, chromatin texture, and boundary information---precisely the high-frequency content on which the contour-based detection head depends. The Haar wavelet emerged as the single most impactful architectural choice in the entire model.
+
+\section{Conclusion}
+
+RayCastED demonstrates that a lightweight, fully convolutional, post-hoc-processing-free architecture can deliver competitive panoptic nuclei segmentation while enabling edge deployment. The largest variant, RayCastED-L (9.44M parameters), achieved a mean panoptic quality of 0.497 (4th overall on PanNuke 3-fold cross-validation) with the lowest per-tissue mPQ standard deviation (0.048) among models of comparable or larger size, at 3--5$\times$ fewer parameters than StarDist, CPP-Net, HoVer-NeXt, and LSP-DETR, and approximately 75$\times$ fewer than LKCell. The entire variant family shares $O(n)$ linear complexity---a direct consequence of eliminating post-hoc NMS and watershed---marking a departure from the $O(n + k^2)$ or $O(n \log n + kn)$ complexity of prior contour-based and mask-based methods.
+
+Edge deployment confirmed that RayCastED-B achieves real-time inference on the RTX 5070 Ti (2.70 ms/image, TensorRT) and near-real-time on the Jetson Orin Nano (29.2 ms/image, FP16), establishing the feasibility of deploying contour-based nuclei detection in resource-constrained clinical settings without cloud offloading. The persistent TensorRT fidelity anomaly on Jetson Orin Nano (consistently higher bPQ/mPQ than desktop) warrants further investigation as a potential avenue for architecture-aware graph optimization.
+
+Ablation studies identified the Haar discrete wavelet transform in ResoConv blocks as the most impactful architectural component (sweeping all five evaluation metrics over db2 and db4), while ray-count experiments revealed that current backbone capacity limits the model to an elliptical shape prior---an important insight for scaling to larger backbones with denser ray configurations. Zero-shot generalization was strong on PUMA melanoma tiles but weak on panopTILs and MoNuSAC, confirming that tissue-level and staining-protocol domain gaps require fine-tuning, even though the raycast representation itself is dataset-agnostic.
+
 
 \section*{Acknowledgment}
 
-The preferred spelling of the word ``acknowledgment'' in America is without 
-an ``e'' after the ``g''. Avoid the stilted expression ``one of us (R. B. 
-G.) thanks $\ldots$''. Instead, try ``R. B. G. thanks$\ldots$''. Put sponsor 
-acknowledgments in the unnumbered footnote on the first page.
-
-\section*{References}
-
-Please cite all your references \cite{2023Bhawal-SST},\cite{2023Chen-Phase-Shift-DAB}. References are stored in a bibtex file "references.bib". You can use Mendeley or Jabref for your reference manager. 
-
-%Please number citations consecutively within brackets \cite{b1}. The 
-%sentence punctuation follows the bracket \cite{b2}. Refer simply to the reference 
-%number, as in \cite{b3}---do not use ``Ref. \cite{b3}'' or ``reference \cite{b3}'' except at 
-%the beginning of a sentence: ``Reference \cite{b3} was the first $\ldots$''
-%
-%Number footnotes separately in superscripts. Place the actual footnote at 
-%the bottom of the column in which it was cited. Do not put footnotes in the 
-%abstract or reference list. Use letters for table footnotes.
-%
-%Unless there are six authors or more give all authors' names; do not use 
-%``et al.''. Papers that have not been published, even if they have been 
-%submitted for publication, should be cited as ``unpublished'' \cite{b4}. Papers 
-%that have been accepted for publication should be cited as ``in press'' \cite{b5}. 
-%Capitalize only the first word in a paper title, except for proper nouns and 
-%element symbols.
-%
-%For papers published in translation journals, please give the English 
-%citation first, followed by the original foreign-language citation \cite{b6}.
-
-
-
 \bibliography{references}{}
 \bibliographystyle{IEEEtran}
-
-%\begin{thebibliography}{00}
-%\bibitem{b1} G. Eason, B. Noble, and I. N. Sneddon, ``On certain integrals of Lipschitz-Hankel type involving products of Bessel functions,'' Phil. Trans. Roy. Soc. London, vol. A247, pp. 529--551, April 1955.
-%\bibitem{b2} J. Clerk Maxwell, A Treatise on Electricity and Magnetism, 3rd ed., vol. 2. Oxford: Clarendon, 1892, pp.68--73.
-%\bibitem{b3} I. S. Jacobs and C. P. Bean, ``Fine particles, thin films and exchange anisotropy,'' in Magnetism, vol. III, G. T. Rado and H. Suhl, Eds. New York: Academic, 1963, pp. 271--350.
-%\bibitem{b4} K. Elissa, ``Title of paper if known,'' unpublished.
-%\bibitem{b5} R. Nicole, ``Title of paper with only first word capitalized,'' J. Name Stand. Abbrev., in press.
-%\bibitem{b6} Y. Yorozu, M. Hirano, K. Oka, and Y. Tagawa, ``Electron spectroscopy studies on magneto-optical media and plastic substrate interface,'' IEEE Transl. J. Magn. Japan, vol. 2, pp. 740--741, August 1987 [Digests 9th Annual Conf. Magnetics Japan, p. 301, 1982].
-%\bibitem{b7} M. Young, The Technical Writer's Handbook. Mill Valley, CA: University Science, 1989.
-%\end{thebibliography}
-
-
 
 \end{document}
