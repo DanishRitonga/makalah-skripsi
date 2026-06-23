@@ -8,7 +8,6 @@
 \usepackage{textcomp}
 \usepackage[table]{xcolor}
 \usepackage{float}
-\usepackage{stfloats}
 \usepackage{tikz}
 \usetikzlibrary{positioning,calc}
 \usepackage{colortbl}
@@ -17,7 +16,7 @@
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 \begin{document}
 
-\title{RayCastED: Lightweight and Boundary-Aware Nuclei Detection Model for Histopathology Images%
+\title{RayCastED: A RayCast End-to-end Detection Model for Lightweight and Boundary-Aware Nuclei Detection in Histopathology Images%
 \thanks{Code: \texttt{https://github.com/DanishRitonga/RayCastED}}}
 
 \author{\IEEEauthorblockN{1\textsuperscript{st} Given Name Surname}
@@ -72,7 +71,7 @@ Training and evaluation were conducted on the PanNuke dataset~\cite{gamper2020pa
 
 \begin{figure}[H]
 \centering
-\input{fig/star-convex}
+\resizebox{\columnwidth}{!}{\input{fig/star-convex}}
 \caption{Star-convex polygon defined by centroid $\mathbf{c}$ and radial ray distances $d_i$ at fixed angular intervals $\theta_i$, forming a dense boundary representation from polar coordinates.}
 \label{fig:raycast}
 \end{figure}
@@ -138,13 +137,11 @@ where $s$ denoted the classification score, $\alpha=0.5$, $d$ the centroid-to-an
 
 Three annealing schedules progressively shifted the training objective toward the O2O-only inference regime. The O2M and O2O branch weights transitioned linearly from $(0.8, 0.2)$ to $(0.1, 0.9)$. The O2O $\text{topk}_2$ parameter annealed from 3 to 1, allowing multiple positive anchors per ground truth during early feature learning before converging to strict bipartite matching. The smoothness loss weight $\lambda_s$ ramped from 0 to 3 over the first 40\% of training. At inference, the O2M head was discarded via fusion, leaving only the O2O head for NMS-free prediction.
 
-\input{tab/per-tissue}
-
 \section{Results}
 
 This section presents experimental results on PanNuke 3-fold cross-validation~\cite{gamper2020pannuke}, edge deployment latency, and ablation studies. All tables in this section report the mean across folds.
 
-\subsection{Experimental Setup}
+\subsection{Evaluation Setup}
 
 Evaluation followed a 3-fold cross-validation protocol on PanNuke, with each fold serving as the test set in turn. Six baseline methods were compared: StarDist~\cite{schmidt2018cell}, CPP-Net (ResNet50)~\cite{chen2023cppnet}, CellViT-SAM-H~\cite{horst2023cellvit}, LKCell-L~\cite{cui2024lkcell}, HoVer-NeXt~\cite{baumann2024hovernext}, and LSP-DETR~\cite{pekar2026lsp}. RayCastED predictions used a confidence threshold of 0.20. All predictions were rasterized to binary masks, with the largest mask assigned to overlapping pixels.
 
@@ -155,6 +152,8 @@ Panoptic quality metrics (bPQ, mPQ) employed Hungarian matching at $\text{IoU} \
 \input{tab/benchmark-efficiency}
 
 Table~\ref{tab:benchmark-efficiency} summarizes parameter counts, GFLOPs, and asymptotic time complexity. RayCastED-S (0.81M parameters, 1.38 GFLOPs) was over 40$\times$ smaller than the next-lightest baseline (StarDist, 32.3M) and approximately 860$\times$ smaller than LKCell. RayCastED-L (9.44M) remained 3--5$\times$ lighter than the baseline cluster (32--45M). The entire RayCastED family shared $O(n)$ linear complexity with LSP-DETR, a consequence of the post-hoc-processing-free design. In contrast, StarDist and CPP-Net incurred $O(n + k^2)$ from per-instance NMS, while LKCell and HoVer-NeXt paid $O(n \log n + kn)$ for watershed post-processing.
+
+\input{tab/per-tissue}
 
 Table~\ref{tab:per-tissue} reports per-tissue bPQ and mPQ across all 19 PanNuke organ types. LKCell achieved the highest overall bPQ (0.684) and mPQ (0.504), benefiting from its 699.7M-parameter capacity. CellViT (0.679/0.498) and CPP-Net (0.680/0.485) followed closely. RayCastED-L ranked fourth on mPQ (0.497) while matching the lowest per-tissue mPQ standard deviation (0.048, tied with HoVer-NeXt at 0.040), indicating the most consistent panoptic quality across heterogeneous tissue types at its parameter tier. RayCastED-L attained the best mPQ on five organs where boundary fidelity proved decisive: Adrenal Gland (0.569), Bile Duct (0.506), Breast (0.529), Liver (0.545), and Thyroid (0.507).
 
